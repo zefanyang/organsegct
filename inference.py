@@ -2,13 +2,14 @@
 # -*- coding:utf-8 -*-
 # @Time  : 6/25/2021 10:41 AM
 # @Author: yzf
+import sys
 import argparse
 import random
 import time
-
+import torch
+import logging
 import pandas as pd
 import SimpleITK as sitk
-import torch
 import torch.backends.cudnn as cudnn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -18,40 +19,43 @@ from utils import tup_to_dict, expand_as_one_hot, get_fold_from_json
 from visualizers.batch_visualizer import *
 from metrics import dice, hausdorff_distance_95, avg_surface_distance_symmetric
 
-from models.unet import UNet3D
-from models.unet_deep_sup import UNetDeepSup
-
-from models.unet_nine_layers.unet_l9 import UNetL9
+from models.unet_nine_layers.unet_l9_deep_sup import UNetL9DeepSup
 from models.unet_nine_layers.unet_l9_deep_sup_full_scheme import UNetL9DeepSupFullScheme
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--gpu', type=str, default='0')
 parser.add_argument('--fold', type=int, default=0)
 parser.add_argument('--batch_size', type=int, default=1)
-parser.add_argument('--net', type=str, default='unet_l9_ds_full_scheme_8_neighbor')  # TODO
+parser.add_argument('--net', type=str, default='unet_l9_ds_full_scheme', choices=['unet_l9_ds', 'unet_l9_ds_full_scheme'])
 parser.add_argument('--init_channels', type=int, default=16)
-parser.add_argument('--optim', type=str, default='adam')
-parser.add_argument('--lr', type=float, default=1e-3)
-parser.add_argument('--N', type=int, default=-1)
+# parser.add_argument('--optim', type=str, default='adam')
+# parser.add_argument('--lr', type=float, default=1e-3)
+# parser.add_argument('--N', type=int, default=-1)
 parser.add_argument('--momentum', type=float, default=0.9)  # for SGD
 parser.add_argument('--weight_decay', type=float, default=3e-4)
 parser.add_argument('--num_class', type=int, default=9)
 parser.add_argument('--organs', type=list, default=['bg', 'spleen', 'left kidney', 'gallbladder', 'esophagus', 'liver', 'stomach', 'pancreas', 'duodenum'])
-parser.add_argument('--num_epoch', type=int, default=400)
+# parser.add_argument('--num_epoch', type=int, default=400)
 parser.add_argument('--seed', default=1234, type=int, help='seed for initializing training.')
-parser.add_argument('--resume', default=False, action='store_true')
-parser.add_argument('--beta', type=float, default=1.)  # for DSC
-parser.add_argument('--beta2', type=float, default=1.)  # for edge
+# parser.add_argument('--resume', default=False, action='store_true')
+# parser.add_argument('--beta', type=float, default=1.)  # for DSC
+# parser.add_argument('--beta2', type=float, default=1.)  # for edge
 # parser.add_argument('--out_fd', type=str, default='./results/unet_fold0')
-parser.add_argument('--cv_json', type=str, default='/raid/yzf/data/abdominal_ct/cv_high_resolution.json')
+parser.add_argument('--cv_json', type=str, default='/data/yzf/dataset/organct/cv_high_resolution.json')
+parser.add_argument('--output_fd', type=str, required=True, help='output folder that stores model checkpoints')
+parser.add_argument('--bestckp', action='store_true', default=False, help='indicator showing whether or not to use the best checkpoint')
 
 args = parser.parse_args()
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
-PARENT_FOLD = 'UNet_9_Layer_Full_Scheme_8_Neighbor'
-CHILD_FOLD = f'unet_deep_sup_full_scheme_8_neigh_fold{args.fold}'
+# PARENT_FOLD = 'UNet_9_Layer_Full_Scheme_8_Neighbor'
+# CHILD_FOLD = f'unet_deep_sup_full_scheme_8_neigh_fold{args.fold}'
 
-args.ckp_file = f'./output/{PARENT_FOLD}/{CHILD_FOLD}/model_best.pth.tar'
+# args.ckp_file = f'./output/{PARENT_FOLD}/{CHILD_FOLD}/model_best.pth.tar'
 # args.ckp_file = f'./output/{PARENT_FOLD}/{CHILD_FOLD}/checkpoint.pth.tar'
+if not args.bestckp:
+    args.ckp_file = os.path.join(args.output_fd, 'model_best.pth.tar')
+else:
+    args.ckp_file = os.path.join(args.output_fd, 'checkpoint.pth.tar')
 
 def get_model(args):
     model = None
@@ -113,8 +117,8 @@ def inference(args):
         with torch.no_grad():
             if 'edge' in args.net:
                 seg_score, _ = model(volume)
-            elif 'rfp' in args.net or 'cascaded' in args.net:
-                _, seg_score = model(volume)
+            # elif 'rfp' in args.net or 'cascaded' in args.net:
+            #     _, seg_score = model(volume)
             elif 'full_scheme' in args.net:
                 _, seg_score, _ = model(volume)
             else:
@@ -140,7 +144,7 @@ def inference(args):
         hd95_ls.append(case_hd95)
         assd_ls.append(case_assd)
 
-        # snapshot
+        # save snapshots
         img = volume[0, 0].cpu().numpy()
         seg = seg[0, 0].cpu().numpy()
         seg_map = seg_map[0, 0].cpu().numpy()
@@ -175,7 +179,7 @@ def inference(args):
         nib_vol = nib.Nifti1Image(seg_map.astype(np.int32), affine)
         nib.save(nib_vol, os.path.join(args.out_fd, 'predictions', f'{simple_idx}.nii.gz'))
 
-        print('Finish evaluating {}. Take {:.2f} s'.format(simple_idx, time.time() - tic))
+        logging.info('Finish evaluating {}. Take {:.2f} s, DSC: {}'.format(simple_idx, time.time() - tic, [round(_, 4) for _ in case_dsc]))
 
     dsc_df = pd.DataFrame(dsc_ls, columns=args.organs[1:], index=index_ls)
     hd95_df = pd.DataFrame(hd95_ls, columns=args.organs[1:], index=index_ls)
@@ -187,10 +191,13 @@ def inference(args):
 
 if __name__ == '__main__':
     args.out_fd = f'./results/{args.net}_fold{args.fold}'
+    os.makedirs(os.path.join(args.out_fd, 'predictions'), exist_ok=True)
+    os.makedirs(os.path.join(args.out_fd, 'snapshots'), exist_ok=True)
 
-    os.makedirs(args.out_fd, exist_ok=False)
-    os.makedirs(os.path.join(args.out_fd, 'predictions'))
-    os.makedirs(os.path.join(args.out_fd, 'snapshots'))
+    # logger
+    logging.basicConfig(filename=args.out_fd+"/log.txt", level=logging.INFO,
+                        format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
+    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 
     # record configurations
     with open(args.out_fd+'/parameters.txt', 'w') as txt:
@@ -202,13 +209,3 @@ if __name__ == '__main__':
         torch.manual_seed(args.seed)
         cudnn.deterministic = True
     inference(args)
-
-
-
-
-# # Experiment: Add rotation jitter. Show performance drop
-# val_transforms = Compose([LoadImage(keys=['image', 'label', 'edge']),
-#                           Clip(keys=['image'], min=-250., max=200.),
-#                           ForeNormalize(keys=['image'], mask_key='label'),
-#                           RandRotate(keys=['image', 'label', 'edge'], interp_order=[1, 0, 0], angle=30., prob=1.),
-#                           ToTensor(keys=['image', 'label', 'edge'])])

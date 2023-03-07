@@ -8,7 +8,7 @@ import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchsummary import summary
+# from torchsummary import summary
 from models.unet import Encoder, Decoder, DoubleConv
 from models.unet_nine_layers.unet_l9_deep_sup import DeepSup
 from models.unet_nine_layers.unet_l9_deep_sup_edge import EGModule

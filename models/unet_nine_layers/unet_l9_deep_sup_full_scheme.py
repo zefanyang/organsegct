@@ -7,13 +7,41 @@ import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchsummary import summary
+# from torchsummary import summary
 from models.unet import Encoder, Decoder, DoubleConv
 from models.unet_nine_layers.unet_l9_deep_sup import DeepSup
 from models.unet_nine_layers.unet_l9_deep_sup_edge import EGModule
 from models.unet_nine_layers.unet_l9_deep_sup_edge_skip import edge_fusion
-from models.unet_nine_layers.unet_l9_deep_sup_rfp import RFP_UAGs
-# from models.unet_nine_layers.unet_l9_deep_sup_rfp_multi_head import RFP_UAGs
+# from models.unet_nine_layers.unet_l9_deep_sup_rfp import RFP_UAGs
+from models.utils_graphical_model import UAG_RNN_4Neigh, UAG_RNN_8Neigh
+
+class RFP_UAGs(nn.Module):
+    def __init__(self, in_ch, num_neigh='four'):
+        super().__init__()
+        self.dag_list = None
+        if num_neigh == 'four':
+            self.dag_list = nn.ModuleList([UAG_RNN_4Neigh(in_ch) for _ in range(64//16)])  # hard-coding '64//8'
+        elif num_neigh == 'eight':
+            self.dag_list = nn.ModuleList([UAG_RNN_8Neigh(in_ch) for _ in range(64//16)])  # hard-coding '64//8'
+        # # add an adaption layer, which may increase learning flexibility
+        # self.adapt = nn.Sequential(
+        #     nn.Conv3d(in_ch, in_ch, kernel_size=3, padding=1),
+        #     nn.BatchNorm3d(in_ch),
+        #     nn.ReLU()
+        # )
+
+    def forward(self, x):
+        d = x.shape[-1]
+        x_hid = []
+        # x_adp = self.adapt(x)
+        x_adp = x
+
+        for i in range(d):
+            hid = self.dag_list[i](x_adp[..., i])
+            x_hid.append(hid.unsqueeze(-1))
+        x_hid = torch.cat(x_hid, dim=-1)
+
+        return x_adp + x_hid
 
 class UNetL9DeepSupFullScheme(nn.Module):
     def __init__(self, in_ch, out_ch, num_neigh='four', interpolate=True, init_ch=16, conv_layer_order='cbr'):

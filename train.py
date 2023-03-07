@@ -2,19 +2,20 @@
 # -*- coding:utf-8 -*-
 # @Time  : 2021/1/12 14:55
 # @Author: yzf
+import os
+import sys
 import argparse
 import time
 import random
 import shutil
-from pathlib import Path
-
 import torch
+import logging
+from pathlib import Path
 import torch.optim as optim
 import torch.nn.functional as F
 import torch.backends.cudnn as cudnn
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-
 from utils import (
     get_fold_from_json, tup_to_dict, poly_lr, AvgMeter, expand_as_one_hot, compute_per_channel_dice,
     compute_dsc, bce2d_new, save_volume
@@ -23,8 +24,6 @@ from cacheio.Dataset import (
     Compose, PersistentDataset, LoadImage,
     Clip, ForeNormalize, RandFlip, RandRotate, ToTensor
 )
-
-from visualizers.batch_visualizer import *
 from models.unet_nine_layers.unet_l9_deep_sup import UNetL9DeepSup
 
 val_freq = 1.
@@ -34,7 +33,7 @@ parser.add_argument('--gpu', type=str, default='0')
 parser.add_argument('--fold', type=int, default=0)
 parser.add_argument('--size', type=tuple, default=(160, 160, 64))
 parser.add_argument('--batch_size', type=int, default=2)
-parser.add_argument('--net', type=str, default='unet')  # TODO
+parser.add_argument('--net', type=str, default='unet_l9_ds')
 parser.add_argument('--init_channels', type=int, default=16)
 parser.add_argument('--optim', type=str, default='adam')
 parser.add_argument('--lr', type=float, default=1e-3)
@@ -48,9 +47,7 @@ parser.add_argument('--seed', default=1234, type=int, help='seed for initializin
 parser.add_argument('--resume', default=False, action='store_true')
 parser.add_argument('--beta', type=float, default=1.)  # for DSC
 parser.add_argument('--beta2', type=float, default=1.)  # for edge
-# parser.add_argument('--root', type=str, default='./output/unet_align')  # TODO
-# parser.add_argument('--cache_dir', type=str, default='./cache/unet_rfp')  # TODO
-parser.add_argument('--cv_json', type=str, default='/raid/yzf/data/abdominal_ct/cv_high_resolution.json')
+parser.add_argument('--cv_json', type=str, default='/data/yzf/dataset/organct/cv_high_resolution.json')
 
 def tr_summary(writer, epoch, c_lr, loss_seg, dsc, loss_edge=None):
     writer.add_scalar('tr_monitor/poly_lr', c_lr, epoch)
@@ -209,7 +206,8 @@ def train_process(epoch, args, net, optimizer, train_dataloader, writer=None):
         loss.backward()
         optimizer.step()
 
-    print('training epoch: {:d}, take: {:.4f} s'.format(epoch, time.time() - tr_start))
+    logging.info('training epoch: {:d}, take: {:.4f} s, lr: {:.6f}, loss_seg: {:.4f}, tr_avg_dice: {:.4f}'
+                 .format(epoch, time.time() - tr_start, c_lr, loss_seg_meter.avg, dsc_meter.avg))
     tr_summary(writer, epoch, c_lr, loss_seg_meter, dsc_meter)
 
 def val_process(epoch, args, net, val_dataloader, writer=None):
@@ -238,44 +236,8 @@ def val_process(epoch, args, net, val_dataloader, writer=None):
                 val_organs_dsc_meter[key].update(organs_dsc[ind].item(), volume.shape[0])
             val_avg_dsc_meter.update(organs_dsc.mean(), volume.shape[0])
 
-            # save volume
-            if epoch % args.num_epoch == 0:
-                # snapshot
-                img = volume[0, 0].cpu().numpy()
-                seg = seg[0, 0].cpu().numpy()
-                seg_map = predicted_map[0, 0].cpu().numpy()
-
-                v_images = []
-                h, w, d = img.shape
-                for ind in range(d):
-                    im = np.rot90(img[..., ind])
-                    se = np.rot90(seg[..., ind])
-                    se_mp = np.rot90(seg_map[..., ind])
-
-                    im = (norm_score(im) * 255.).astype(np.uint8)
-                    imRGB = cv2.cvtColor(im, cv2.COLOR_GRAY2RGB);
-                    getScoreMap = lambda x, rang: cv2.addWeighted(get_score_map(x, rang),
-                                                            0.8, imRGB, 0.2, 0)
-                    se = getScoreMap(se, (0, 8))
-                    se_mp = getScoreMap(se_mp, (0, 8))
-
-                    # add text in images. Occur bugs; im.copy() solves the problem.
-                    im = imtext(im.copy(), text='{:d} {:.2f}'.format(ind, organs_dsc.mean() * 100),
-                                space=(3, 10), color=(255,) * 3, thickness=2, fontScale=.6)
-
-                    h_images = [im, se, se_mp]
-                    v_images.append(imhstack(h_images, height=160))
-                v_images = imvstack(v_images)
-
-                name = Path(case[0]).name
-                fd = os.path.join(args.root, 'snapshots')
-                os.makedirs(fd, exist_ok=True)
-                imwrite(os.path.join(fd, name.replace('.nii.gz', '.jpg')), v_images)
-
-
-                save_volume(case[0], predicted_map[0, 0].cpu().numpy(), os.path.join(args.root, f'predictions'))
-
-    print('validation epoch: {:d}, take: {:.4f} s'.format(epoch, time.time() - val_time))
+    logging.info('validation epoch: {:d}, take: {:.4f} s, loss_seg: {:.4f}, val_avg_dsc: {:.4f}'
+                 .format(epoch, time.time() - val_time, val_loss_seg_meter.avg, val_avg_dsc_meter.avg))
     val_summary(writer, epoch, val_loss_seg_meter, val_organs_dsc_meter, val_avg_dsc_meter)
 
     return val_avg_dsc_meter.avg
@@ -303,11 +265,6 @@ def main_worker(args):
     train_dataloader, val_dataloader = get_dataloader(args)
     for epoch in range(start_epoch, args.num_epoch+1):
         tic = time.time()
-        # if args.is_edge:
-        #     train_process_edge(epoch, args, model, optimizer, train_dataloader, writer)
-        #     if epoch % val_freq == 0:
-        #         dsc = val_process_edge(epoch, args, model, val_dataloader, writer)
-        # else:
         train_process(epoch, args, model, optimizer, train_dataloader, writer)
         if epoch % val_freq == 0:
             dsc = val_process(epoch, args, model, val_dataloader, writer)
@@ -336,20 +293,12 @@ def main_worker(args):
 def main():
     args = parser.parse_args()
     args.cache_dir = f'./cache/{Path(__file__).stem}_{args.net}_fold{args.fold}'
-    args.root = f'./output/{args.net}_fold{args.fold}'
-    ## environment
-    # gpu
-    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+    args.root = f'./outputs/{args.net}_fold{args.fold}_{time.strftime("%H-%M-%S-%m%d")}'
 
     # remove files
     root = Path(args.root)
     cache = Path(args.cache_dir)
     if not args.resume:
-        if root.exists():
-            if '11' == input("Input '11' to continue removing process: "):
-                shutil.rmtree(root)
-            else:
-                raise RuntimeError("Make sure the former output files are backed up properly")
         if cache.exists():
             shutil.rmtree(cache)  # clear cache
         root_ = root / 'predictions/edge'
@@ -357,11 +306,19 @@ def main():
         if not root_.is_dir():
             raise ValueError("root must be a directory.")
 
+    # gpu
+    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+
     # deterministic training for reproducibility
     if args.seed is not None:
         random.seed(args.seed)
         torch.manual_seed(args.seed)
         cudnn.deterministic = True
+
+    # logger
+    logging.basicConfig(filename=args.root+"/log.txt", level=logging.INFO,
+                        format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
+    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 
     # log configurations
     with open(root / 'parameters.txt', 'w') as f:

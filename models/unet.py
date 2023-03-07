@@ -2,7 +2,7 @@ import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchsummary import summary
+# from torchsummary import summary
 
 class UNet3D(nn.Module):
     def __init__(self, in_channels, out_channels, interpolate=True, conv_layer_order='cbr', init_ch=16):
