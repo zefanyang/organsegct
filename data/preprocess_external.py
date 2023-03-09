@@ -18,6 +18,26 @@ f.close()
 trainings = metadata['training']
 resample_size = (160, 160, 64)  # (x, y, z)
 
+# "labels": {
+#     "0": "background",
+#     "1": "liver",
+#     "2": "spleen",
+#     "3": "left_kidney",
+#     "4": "right_kidney",
+#     "5": "stomach",
+#     "6": "gallbladder",
+#     "7": "esophagus",
+#     "8": "pancreas",
+#     "9": "duodenum",
+#     "10": "colon",
+#     "11": "intestine",
+#     "12": "adrenal",
+#     "13": "rectum",
+#     "14": "bladder",
+#     "15": "Head_of_femur_L",
+#     "16": "Head_of_femur_R"
+# }
+
 def resample_to_spacing(image, new_spacing, is_mask=False):
     original_spacing = image.GetSpacing()
     original_size = image.GetSize()
@@ -74,4 +94,3 @@ if __name__ == '__main__':
         sitk.WriteImage(imgnew, os.path.join(outpath, 'image', name))
         sitk.WriteImage(labnew, os.path.join(outpath, 'label', name))
         print(name)
-

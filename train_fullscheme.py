@@ -1,16 +1,19 @@
 #!/usr/bin/env python
 # -*- coding:utf-8 -*-
-# @Time  : 2021/1/12 14:55
+# @Time  : 7/1/2021 9:36 PM
 # @Author: yzf
+"""
+Make the following modification: adjust the seg_loss function so that it can calculate multiple outputs.
+"""
 import os
 import sys
 import argparse
+import logging
 import time
 import random
 import shutil
-import torch
-import logging
 from pathlib import Path
+import torch
 import torch.optim as optim
 import torch.nn.functional as F
 import torch.backends.cudnn as cudnn
@@ -18,22 +21,23 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from utils import (
     get_fold_from_json, tup_to_dict, poly_lr, AvgMeter, expand_as_one_hot, compute_per_channel_dice,
-    compute_dsc, bce2d_new, save_volume
+    compute_dsc, bce2d_new, save_volume, save_edge
 )
 from cacheio.Dataset import (
     Compose, PersistentDataset, LoadImage,
     Clip, ForeNormalize, RandFlip, RandRotate, ToTensor
 )
-from models.unet_nine_layers.unet_l9_deep_sup import UNetL9DeepSup
+# from visualizers.batch_visualizer import *
+from models.unet_nine_layers.unet_l9_deep_sup_full_scheme import UNetL9DeepSupFullScheme
 
 val_freq = 1.
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--gpu', type=str, default='0')
+parser.add_argument('--gpu', type=str, default='1')
 parser.add_argument('--fold', type=int, default=0)
 parser.add_argument('--size', type=tuple, default=(160, 160, 64))
 parser.add_argument('--batch_size', type=int, default=2)
-parser.add_argument('--net', type=str, default='unet_l9_ds')
+parser.add_argument('--net', type=str, default='unet_deep_sup_full_scheme')
 parser.add_argument('--init_channels', type=int, default=16)
 parser.add_argument('--optim', type=str, default='adam')
 parser.add_argument('--lr', type=float, default=1e-3)
@@ -48,6 +52,8 @@ parser.add_argument('--resume', default=False, action='store_true')
 parser.add_argument('--beta', type=float, default=1.)  # for DSC
 parser.add_argument('--beta2', type=float, default=1.)  # for edge
 parser.add_argument('--cv_json', type=str, default='/data/yzf/dataset/organct/cv_high_resolution.json')
+
+parser.add_argument('--no_escs', type=int, default=4)
 
 def tr_summary(writer, epoch, c_lr, loss_seg, dsc, loss_edge=None):
     writer.add_scalar('tr_monitor/poly_lr', c_lr, epoch)
@@ -85,10 +91,8 @@ def resume_model(model, fd):
 
 def get_model(args):
     model = None
-
-    # UNet 9 layers
-    if args.net == 'unet_l9_ds':
-        model = UNetL9DeepSup(1, args.num_class, init_ch=args.init_channels)
+    if args.net == 'unet_deep_sup_full_scheme':
+        model = UNetL9DeepSupFullScheme(1, args.num_class, init_ch=args.init_channels)
 
     if model is None:
         raise ValueError('Model is None.')
@@ -164,12 +168,24 @@ def adjust_lr(optimizer, epoch, max_epoch, initial_lr=1e-4, N=-1):
     return param_group['lr']
 
 def compute_loss(outputs, seg, seg_one_hot):
-    loss_ce = torch.nn.CrossEntropyLoss()(outputs, seg.squeeze(1).long())
-    output_soft = F.softmax(outputs, dim=1)
-    seg_dice = compute_per_channel_dice(output_soft, seg_one_hot)
-    loss_dice = 1. - seg_dice.mean()
-    predicted_map = torch.argmax(output_soft, dim=1, keepdim=True).float()
-    return loss_dice, loss_ce, seg_dice, predicted_map
+    score1, score2 = outputs
+
+    def criterion(score, seg, seg_one_hot):
+        loss_ce = torch.nn.CrossEntropyLoss()(score, seg.squeeze(1).long())
+        prob = F.softmax(score, dim=1)
+        dice = compute_per_channel_dice(prob, seg_one_hot)
+        loss_dice = 1. - dice.mean()
+        return loss_ce, prob, dice, loss_dice
+
+    loss_ce1, prob1, dice1, loss_dice1 = criterion(score1, seg, seg_one_hot)
+    loss_ce2, prob2, dice2, loss_dice2 = criterion(score2, seg, seg_one_hot)
+
+    loss_dice = loss_dice1 + loss_dice2
+    loss_ce = loss_ce1 + loss_ce2
+
+    # only outputs the final segmentation map
+    predicted_map = torch.argmax(prob2, dim=1, keepdim=True).float()
+    return loss_dice, loss_ce, dice2, predicted_map
 
 def compute_edge_loss(edge, edge_score, mode='weighted'):
     if mode == 'vanilla':
@@ -179,27 +195,32 @@ def compute_edge_loss(edge, edge_score, mode='weighted'):
     edge_confidence = F.sigmoid(edge_score)
     return loss_edge, edge_confidence
 
-def train_process(epoch, args, net, optimizer, train_dataloader, writer=None):
-    """training w/o edge"""
+def train_process_edge(epoch, args, net, optimizer, train_dataloader, writer=None):
+    """training w edge"""
     tr_start = time.time()  # timing
     c_lr = adjust_lr(optimizer, epoch=epoch, max_epoch=args.num_epoch, initial_lr=args.lr, N=args.N)
     net.train()
 
     loss_seg_meter = AvgMeter()
+    loss_edge_meter = AvgMeter()
     dsc_meter = AvgMeter()
 
     len_train_batch = len(train_dataloader)
     for i, tr_data in enumerate(train_dataloader):
-        case, volume, seg, _ = parse_data(tr_data)
+        # z, ...
+        case, volume, seg, edge = parse_data(tr_data)
         seg_one_hot = expand_as_one_hot(seg.squeeze(1).long(), args.num_class).cuda()
         volume = volume.cuda()
         seg = seg.cuda()
+        edge = edge.cuda()
 
-        outputs = net(volume)
+        *outputs, edge_score = net(volume)
         loss_dice, loss_ce, seg_dsc, predicted_map = compute_loss(outputs, seg, seg_one_hot)
-        loss = loss_dice + args.beta * loss_ce
+        loss_edge, edge_confidence = compute_edge_loss(edge, edge_score)
+        loss = loss_dice + args.beta * loss_ce + args.beta2 * loss_edge
 
         loss_seg_meter.update((loss_dice + args.beta * loss_ce).item(), volume.shape[0])
+        loss_edge_meter.update(args.beta2 * loss_edge.item(), volume.shape[0])
         dsc_meter.update((seg_dsc[1:].mean()).item(), volume.shape[0])
 
         optimizer.zero_grad()
@@ -210,27 +231,30 @@ def train_process(epoch, args, net, optimizer, train_dataloader, writer=None):
                  .format(epoch, time.time() - tr_start, c_lr, loss_seg_meter.avg, dsc_meter.avg))
     tr_summary(writer, epoch, c_lr, loss_seg_meter, dsc_meter)
 
-def val_process(epoch, args, net, val_dataloader, writer=None):
-    """validation w/o edge"""
+def val_process_edge(epoch, args, net, val_dataloader, writer=None):
+    """validation w edge"""
     val_time = time.time()
     net.eval()
     # validation
     val_loss_seg_meter = AvgMeter()
+    val_loss_edge_meter = AvgMeter()
     val_organs_dsc_meter = dict([(org, AvgMeter()) for org in args.organs])
     val_avg_dsc_meter = AvgMeter()
     len_val = len(val_dataloader)
     with torch.no_grad():
         for i, val_data in enumerate(val_dataloader):
-            case, volume, seg, _ = parse_data(val_data)
+            case, volume, seg, edge = parse_data(val_data)
             seg_one_hot = expand_as_one_hot(seg.squeeze(1).long(), args.num_class).cuda()
             volume = volume.cuda()
             seg = seg.cuda()
-
-            outputs = net(volume)
+            edge = edge.cuda()
+            *outputs, edge_score = net(volume)
             val_loss_dice, val_loss_ce, seg_dice, predicted_map = compute_loss(outputs, seg, seg_one_hot)
+            val_loss_edge, val_edge_confidence = compute_edge_loss(edge, edge_score)
             organs_dsc = compute_dsc(predicted_map, seg, args.num_class)
 
             val_loss_seg_meter.update((val_loss_dice+args.beta*val_loss_ce).item(), volume.shape[0])
+            val_loss_edge_meter.update((args.beta2*val_loss_edge).item(), volume.shape[0])
             for ind, key in enumerate(val_organs_dsc_meter.keys()):
                 # if not math.isnan(organs_dsc[ind]):
                 val_organs_dsc_meter[key].update(organs_dsc[ind].item(), volume.shape[0])
@@ -265,9 +289,9 @@ def main_worker(args):
     train_dataloader, val_dataloader = get_dataloader(args)
     for epoch in range(start_epoch, args.num_epoch+1):
         tic = time.time()
-        train_process(epoch, args, model, optimizer, train_dataloader, writer)
+        train_process_edge(epoch, args, model, optimizer, train_dataloader, writer)
         if epoch % val_freq == 0:
-            dsc = val_process(epoch, args, model, val_dataloader, writer)
+            dsc = val_process_edge(epoch, args, model, val_dataloader, writer)
             # remember best dsc and save checkpoint
             is_best = dsc > best_dsc
             best_dsc = max(dsc, best_dsc)
@@ -286,7 +310,6 @@ def main_worker(args):
 
         tol_time += time.time()-tic
         writer.add_scalar('timing', tol_time/3600., epoch,)
-
     writer.close()
 
 def main():

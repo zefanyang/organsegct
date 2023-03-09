@@ -34,10 +34,10 @@ def make_cvjson():
         ls = [namesfold0, namesfold1, namesfold2, namesfold3]
         valnames = ls.pop(i)
         trnames = np.hstack(ls)
-        trainingfold[f'fold{i}'] = list(trnames)
-        validationfold[f'fold{i}'] = list(valnames)
+        trainingfold[f'fold_{i}'] = list(trnames)
+        validationfold[f'fold_{i}'] = list(valnames)
 
-    cvdict = {'training': trainingfold, 'validation': validationfold}
+    cvdict = {'train': trainingfold, 'val': validationfold}
     with open(os.path.join(basepath, 'cross_validation.json'), 'w') as f:
         json.dump(cvdict, f, indent=4)
     return
