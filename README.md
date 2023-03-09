@@ -1,4 +1,4 @@
-![](./images/banner.png)This repository contains source code for abdominal multi-organ segmentation in computed tomography (CT). The technical paper that describes the method is titled **Recurrent Feature Propagation and Edge Skip-Connections for Automatic Abdominal Organ Segmentation** [[arXiv]]([Recurrent Feature Propagation and Edge Skip-Connections for Automatic Abdominal Organ Segmentation](https://arxiv.org/abs/2201.00317)).
+![](./images/banner.png)This repository contains source code for abdominal multi-organ segmentation in computed tomography (CT). The technical paper that describes the method is titled **Recurrent Feature Propagation and Edge Skip-Connections for Automatic Abdominal Organ Segmentation** [[arXiv]](https://arxiv.org/abs/2201.00317)).
 
 ## CT Images Information
 
