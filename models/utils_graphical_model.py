@@ -7,7 +7,7 @@ import torch.nn as nn
 from torch.nn import Conv1d, ReLU, Parameter
 
 class UAG_RNN_4Neigh(nn.Module):
-    """Four Neighbor Unidirectional Acyclic Graphs (UAGs). Henghui Ding et al., ICCV, 2019"""
+    """Four Neighbor Unidirectional Acyclic Graphs (UAGs). ICCV, 2019"""
     def __init__(self, in_dim):
         super(UAG_RNN_4Neigh, self).__init__()
         self.chanel_in = in_dim

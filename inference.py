@@ -34,7 +34,8 @@ parser.add_argument('--init_channels', type=int, default=16)
 parser.add_argument('--momentum', type=float, default=0.9)  # for SGD
 parser.add_argument('--weight_decay', type=float, default=3e-4)
 parser.add_argument('--num_class', type=int, default=9)
-parser.add_argument('--organs', type=list, default=['bg', 'spleen', 'left kidney', 'gallbladder', 'esophagus', 'liver', 'stomach', 'pancreas', 'duodenum'])
+parser.add_argument('--organs', type=list,
+                    default=['bg', 'spleen', 'left kidney', 'gallbladder', 'esophagus', 'liver', 'stomach', 'pancreas', 'duodenum'])
 # parser.add_argument('--num_epoch', type=int, default=400)
 parser.add_argument('--seed', default=1234, type=int, help='seed for initializing training.')
 # parser.add_argument('--resume', default=False, action='store_true')

@@ -26,7 +26,9 @@ Note that the second step (cropping CT scans to ROIs) is optional and the resamp
 
 ## Training
 
-We trains separate segmentation models for the DenseVNet and WORD datasets. We store data in the parent directory `/data/yzf/dataset/organct`. Shown below is the tree structure of the DenseVNet data folder. The `edge`, `preproc_img` and `preproc_label` folder contains edge maps, images, and ground truth labels respectively.
+We train segmentation models on the DenseVNet dataset and use the WORD dataset as an external validation dataset to see generalizability. 
+
+We store data in the parent directory `/data/yzf/dataset/organct`. Shown below is the tree structure of the DenseVNet data folder. The `edge`, `preproc_img` and `preproc_label` folder contains edge maps, images, and ground truth labels respectively. The `cv_high_resolution.jason` file records cross-validation splits.
 
 ```
 /data/yzf/dataset/organct
@@ -41,57 +43,44 @@ We trains separate segmentation models for the DenseVNet and WORD datasets. We s
     └── preproc_label
 ```
 
-Show below is the tree structure of the WORD data folder. The `imagesTr` and `labelsTr` folders contain original images and labels. The `preprocessed` folder contains preprocessed data as it is.
+Show below is the tree structure of the WORD data folder. The `imagesVal` and `labelsVal` folders contain original images and labels. The `preprocessedval` folder contains preprocessed data as it is.
 
 ```
 /data/yzf/dataset/organct/external
-├── imagesTr
-├── labelsTr
-└── preprocessed
-    ├── edge
+├── imagesVal
+├── labelsVal
+└── preprocessedval
     ├── image
     └── label
 ```
 
-Two files in jason format are used to record cross validation splits. They are `cv_high_resolution.jason` for the DenseVNet dataset and `cross_validation.json` for the WORD dataset.
-
-We implement two models in this codebase, the baseline model and our proposed model.  `train.py` and `train_external.py` are for the training of the baseline model on the DenseVNet and WORD dataset respectively. The following commands run the training programs.
+We implement two models in this codebase, the baseline model and our proposed model.  `train.py` is for the training of the baseline model. The following commands run the training program.
 
 ```
 python train.py --gpu=0 --fold=0 --num_class=9 --cv_json='/path/to/DenseVNet/cross_validation.json'
 ```
 
-```
-python train_external.py --gpu=1 --fold=0 --num_class=17 --cv_json='/path/to/WORD/cross_validation.json'
-```
-
-`train_fullscheme.py` and `train_fullscheme_external.py` are for our proposed model. Commands to run the programs are as follows.
+`train_fullscheme.py` is for our proposed model. Commands to run the program are as follows.
 
 ```
 python train_fullscheme.py --gpu=0 --fold=0 --num_class=9 --cv_json='/path/to/DenseVNet/cross_validation.json'
 ```
 
-```
-python train_fullscheme_external.py --gpu=0 --fold=0 --num_class=17 --cv_json='/path/to/WORD/cross_validation.json'
-```
-
 ## Inference
 
-Three metrics are used to quantify segmentation predictions. They are the Dice similarity coefficient (DSC), average symmetry surface distance (ASSD), and the 95*-th* percentile of Hausdorff distance (HD95). `inference.py` and `inference_external.py` predict validation segmentation volumes and compute evaluation metrics on the DenseVNet and WORD datasets respectively.
+Three metrics are used to quantify segmentation predictions. They are the Dice similarity coefficient (DSC), average symmetry surface distance (ASSD), and the 95*-th* percentile of Hausdorff distance (HD95). `inference.py` and `inference_external.py` predict validation segmentation volumes and compute evaluation metrics on the DenseVNet dataset and the external WORD dataset respectively.
 
 ```
 python inference.py --gpu=0 --fold=0 --net=unet_l9_ds --num_class=9 --cv_json='/path/to/DenseVNet/cross_validation.json'
 ```
 
 ```
-python inference_external.py --gpu=0 --fold=0 --net=unet_l9_ds --num_class=17 --cv_json='/path/to/WORD/cross_validation.json'
+python inference_external.py --gpu=0 --fold=0 --net=unet_l9_ds --num_class=9 --cv_json='/path/to/WORD/cross_validation.json'
 ```
 
 ## Funtionality
 
-`./models/utils_graphical_model.py` defines classes that construct 2D recurrent networks based on directed acyclic graphs.
-
-`./data/detectedge_external.py`  contains functions for edge detection.
+`./models/utils_graphical_model.py` defines classes that construct 2D recurrent neural networks based on directed acyclic graphs.
 
 ## Citation
 

@@ -33,7 +33,7 @@ parser.add_argument('--init_channels', type=int, default=16)
 # parser.add_argument('--N', type=int, default=-1)
 parser.add_argument('--momentum', type=float, default=0.9)  # for SGD
 parser.add_argument('--weight_decay', type=float, default=3e-4)
-parser.add_argument('--num_class', type=int, default=17, help="1 background class and 16 forground classes")
+parser.add_argument('--num_class', type=int, default=17, choices=[17])
 parser.add_argument('--organs', type=list, default=
 ['bg', 'liver', 'spleen', 'left_kidney', 'right_kidney', 'stomach', 'gallbladder', 'esophagus', 'pancreas',
  'duodenum', 'colon', 'intensine', 'adrenal', 'rectum', 'bladder', 'head_of_femur_l', 'head_of_femur_r'])
@@ -55,7 +55,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 
 # args.ckp_file = f'./output/{PARENT_FOLD}/{CHILD_FOLD}/model_best.pth.tar'
 # args.ckp_file = f'./output/{PARENT_FOLD}/{CHILD_FOLD}/checkpoint.pth.tar'
-if not args.bestckp:
+if args.bestckp:
     args.ckp_file = os.path.join(args.output_fd, 'model_best.pth.tar')
 else:
     args.ckp_file = os.path.join(args.output_fd, 'checkpoint.pth.tar')
@@ -188,7 +188,8 @@ def inference(args):
     assd_df.to_csv(os.path.join(args.out_fd, 'assd.csv'))
 
 if __name__ == '__main__':
-    args.out_fd = f'./results/external/{args.net}_fold{args.fold}'
+    assert f'fold{args.fold}' in os.path.basename(args.output_fd), 'Fold parameters should be consistent.'
+    args.out_fd = f'./results/external/{os.path.basename(args.output_fd)}'
     os.makedirs(os.path.join(args.out_fd, 'predictions'), exist_ok=True)
     os.makedirs(os.path.join(args.out_fd, 'snapshots'), exist_ok=True)
 
