@@ -2,7 +2,9 @@
 # -*- coding:utf-8 -*-
 # @Time  : 6/25/2021 10:41 AM
 # @Author: yzf
+"""External Validation on the WORD dataset"""
 import sys
+import json
 import argparse
 import random
 import time
@@ -24,41 +26,25 @@ from models.unet_nine_layers.unet_l9_deep_sup_full_scheme import UNetL9DeepSupFu
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--gpu', type=str, default='3')
-parser.add_argument('--fold', type=int, default=0)
 parser.add_argument('--batch_size', type=int, default=1)
 parser.add_argument('--net', type=str, default='unet_l9_ds_full_scheme', choices=['unet_l9_ds', 'unet_l9_ds_full_scheme'])
 parser.add_argument('--init_channels', type=int, default=16)
-# parser.add_argument('--optim', type=str, default='adam')
-# parser.add_argument('--lr', type=float, default=1e-3)
-# parser.add_argument('--N', type=int, default=-1)
-parser.add_argument('--momentum', type=float, default=0.9)  # for SGD
-parser.add_argument('--weight_decay', type=float, default=3e-4)
-parser.add_argument('--num_class', type=int, default=17, choices=[17])
-parser.add_argument('--organs', type=list, default=
-['bg', 'liver', 'spleen', 'left_kidney', 'right_kidney', 'stomach', 'gallbladder', 'esophagus', 'pancreas',
- 'duodenum', 'colon', 'intensine', 'adrenal', 'rectum', 'bladder', 'head_of_femur_l', 'head_of_femur_r'])
-# parser.add_argument('--num_epoch', type=int, default=400)
+parser.add_argument('--num_class', type=int, default=9, choices=[9])
+parser.add_argument('--organs', type=list,
+                    default=['bg', 'spleen', 'left kidney', 'gallbladder', 'esophagus', 'liver', 'stomach', 'pancreas', 'duodenum'])
 parser.add_argument('--seed', default=1234, type=int, help='seed for initializing training.')
-# parser.add_argument('--resume', default=False, action='store_true')
-# parser.add_argument('--beta', type=float, default=1.)  # for DSC
-# parser.add_argument('--beta2', type=float, default=1.)  # for edge
-# parser.add_argument('--out_fd', type=str, default='./results/unet_fold0')
-parser.add_argument('--cv_json', type=str, default='/data/yzf/dataset/organct/external/cross_validation.json')
-parser.add_argument('--basepath', type=str, default='/data/yzf/dataset/organct/external/preprocessed')
-parser.add_argument('--output_fd', type=str, required=True, help='output folder that stores model checkpoints')
+parser.add_argument('--val_json', type=str, default='/data/yzf/dataset/organct/external/namesval.json')
+parser.add_argument('--basepath', type=str, default='/data/yzf/dataset/organct/external/preprocessedval')
+parser.add_argument('--checkpointfd', type=str, required=True, help='output folder that stores model checkpoints')
 parser.add_argument('--bestckp', action='store_true', default=False, help='indicator showing whether or not to use the best checkpoint')
 
 args = parser.parse_args()
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
-# PARENT_FOLD = 'UNet_9_Layer_Full_Scheme_8_Neighbor'
-# CHILD_FOLD = f'unet_deep_sup_full_scheme_8_neigh_fold{args.fold}'
 
-# args.ckp_file = f'./output/{PARENT_FOLD}/{CHILD_FOLD}/model_best.pth.tar'
-# args.ckp_file = f'./output/{PARENT_FOLD}/{CHILD_FOLD}/checkpoint.pth.tar'
 if args.bestckp:
-    args.ckp_file = os.path.join(args.output_fd, 'model_best.pth.tar')
+    args.ckp_file = os.path.join(args.checkpointfd, 'model_best.pth.tar')
 else:
-    args.ckp_file = os.path.join(args.output_fd, 'checkpoint.pth.tar')
+    args.ckp_file = os.path.join(args.checkpointfd, 'checkpoint.pth.tar')
 
 def get_model(args):
     model = None
@@ -75,19 +61,25 @@ def parse_data(data):
     img_file = data['img_file']
     image = data['image']
     label = data['label']
-    edge = data['edge']
-    return img_file, image, label, edge
+    return img_file, image, label
 
 def get_dataloader(args):
-    _, val_list = get_fold_from_json(args.cv_json, args.fold)
-    val_list = [(os.path.join(args.basepath, 'image', _), os.path.join(args.basepath, 'label', _),
-                   os.path.join(args.basepath, 'edge', _)) for _ in val_list]
-    d_val_list = tup_to_dict(val_list)
+    f = open(args.val_json)
+    nameslist = json.load(f)
+    f.close()
+    val_list = [(os.path.join(args.basepath, 'image', _), os.path.join(args.basepath, 'label', _)) for _ in nameslist]
+    d_val_list = []
+    for tup in val_list:
+        dct = {}
+        dct['img_file'] = tup[0]
+        dct['image'] = tup[0]
+        dct['label'] = tup[1]
+        d_val_list.append(dct)
 
-    val_transforms = Compose([LoadImage(keys=['image', 'label', 'edge']),
+    val_transforms = Compose([LoadImage(keys=['image', 'label']),
                               Clip(keys=['image'], min=-250., max=200.),
                               ForeNormalize(keys=['image'], mask_key='label'),
-                              ToTensor(keys=['image', 'label', 'edge'])])
+                              ToTensor(keys=['image', 'label'])])
 
     # Regular Dataset
     val_dataset = RegularDataset(data=d_val_list, transform=val_transforms)
@@ -106,7 +98,7 @@ def inference(args):
     val_dataloader = get_dataloader(args)
     for i, val_data in enumerate(val_dataloader):
         tic = time.time()
-        case, volume, seg, _ = parse_data(val_data)
+        case, volume, seg = parse_data(val_data)
         spacing = sitk.ReadImage(case).GetSpacing()
         volume = volume.cuda()
         seg = seg.cuda()
@@ -141,41 +133,6 @@ def inference(args):
         hd95_ls.append(case_hd95)
         assd_ls.append(case_assd)
 
-        # # save snapshots
-        # img = volume[0, 0].cpu().numpy()
-        # seg = seg[0, 0].cpu().numpy()
-        # seg_map = seg_map[0, 0].cpu().numpy()
-        #
-        # v_images = []
-        # h, w, d = img.shape
-        # for ind in range(d):
-        #     im = np.rot90(img[..., ind])
-        #     se = np.rot90(seg[..., ind])
-        #     se_mp = np.rot90(seg_map[..., ind])
-        #
-        #     im = (norm_score(im) * 255.).astype(np.uint8)
-        #     imRGB = cv2.cvtColor(im, cv2.COLOR_GRAY2RGB)
-        #     getScoreMap = lambda x: cv2.addWeighted(get_score_map(x, rang=(0, 8)),
-        #                                             0.8, imRGB, 0.2, 0)
-        #
-        #     se = getScoreMap(se)
-        #     se_mp = getScoreMap(se_mp)
-        #
-        #     # add text in images. Occur bugs; im.copy() solves the problem.
-        #     im = imtext(im.copy(), text='{:d} {:.2f}'.format(ind, np.nanmean(case_dsc) * 100),
-        #                 space=(3, 10), color=(255,) * 3, thickness=2, fontScale=.6)
-        #
-        #     h_images = [im, se, se_mp]
-        #     v_images.append(imhstack(h_images, height=160))
-        # v_images = imvstack(v_images)
-        #
-        # imwrite(os.path.join(args.out_fd, 'snapshots', f'{simple_idx}.jpg'), v_images)
-
-        # # save prediction
-        # affine = nib.load(case[0]).affine
-        # nib_vol = nib.Nifti1Image(seg_map.astype(np.int32), affine)
-        # nib.save(nib_vol, os.path.join(args.out_fd, 'predictions', f'{simple_idx}.nii.gz'))
-
         logging.info('Finish evaluating {}. Take {:.2f} s, DSC: {}, Avg DSC: {:.4f}'
                      .format(simple_idx, time.time() - tic, [round(_, 4) for _ in case_dsc], np.mean(case_dsc)))
 
@@ -188,8 +145,7 @@ def inference(args):
     assd_df.to_csv(os.path.join(args.out_fd, 'assd.csv'))
 
 if __name__ == '__main__':
-    assert f'fold{args.fold}' in os.path.basename(args.output_fd), 'Fold parameters should be consistent.'
-    args.out_fd = f'./results/external/{os.path.basename(args.output_fd)}'
+    args.out_fd = f'./results/externalval/{os.path.basename(args.checkpointfd)}'
     os.makedirs(os.path.join(args.out_fd, 'predictions'), exist_ok=True)
     os.makedirs(os.path.join(args.out_fd, 'snapshots'), exist_ok=True)
 
