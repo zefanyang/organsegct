@@ -57,13 +57,24 @@ Show below is the tree structure of the WORD data folder. The `imagesVal` and `l
 We implement two models in this codebase, the baseline model and our proposed model.  `train.py` is for the training of the baseline model. The following commands run the training program.
 
 ```
-python train.py --gpu=0 --fold=0 --num_class=9 --cv_json='/path/to/DenseVNet/cross_validation.json'
+python train.py --gpu=0 --fold=0 --num_class=9 --cv_json=/path/to/DenseVNet/cross_validation.json
 ```
 
 `train_fullscheme.py` is for our proposed model. Commands to run the program are as follows.
 
 ```
-python train_fullscheme.py --gpu=0 --fold=0 --num_class=9 --cv_json='/path/to/DenseVNet/cross_validation.json'
+python train_fullscheme.py --gpu=0 --fold=0 --num_class=9 --cv_json=/path/to/DenseVNet/cross_validation.json
+```
+## Fine-tuning
+
+This section describes our implementation of external validation experiments. We use our previously trained model to initialize model parameters and fine-tune the parameters on the WORD training set. We then inference results on the WORD validation set. `finetune.py` and `finetune_fullscheme.py` are for the fine-tuning of the UNet model and our proposed model respectively.  Commands are as follows.
+
+```
+python finetune.py --gpu=0 --net=unet_l9_ds --num_epoch=20 --pretrainedckp=/path/to/pretrained/checkpoint.pth.tar
+```
+
+```
+python finetune_fullscheme.py --gpu=0 --net=unet_deep_sup_full_scheme --num_epoch=20 --pretrainedckp=/path/to/pretrained/checkpoint.pth.tar
 ```
 
 ## Inference
